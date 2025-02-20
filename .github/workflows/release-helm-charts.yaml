@@ -1,84 +1,144 @@
-name: Release Helm charts
-
+name: release-helm-charts.yaml
 on:
-  release:
-    types:
-      - published
+  push:
+    branches:
+      - master
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
+  group: ${{ github.workflow }}-${{ github.ref }}
 env:
   HELM_REGISTRY: ghcr.io
   HELM_REPOSITORY: ${{ github.repository_owner }}/helm-charts
-
 jobs:
   release_helm_charts:
     permissions:
       contents: write
       packages: write
-
     runs-on: ubuntu-latest
-
     steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
       - name: Checkout source code
         uses: actions/checkout@v4
-
       - name: Configure Git
-        run: |
-          git config user.name "$GITHUB_ACTOR"
+        run: 'git config user.name "$GITHUB_ACTOR"
+
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
+          '
+      - id: measurement-3
+        name: Record Measurement After Configure Git
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Configure Git
+          task: get-measurement
       - name: Set up Helm
         uses: azure/setup-helm@v4.2.0
         with:
           version: v3.14.4
-
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
+          password: ${{ secrets.GITHUB_TOKEN }}
           registry: ${{ env.HELM_REGISTRY }}
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Read version from VERSION file
-        run: |
-          VERSION=$(cat VERSION)
+        run: 'VERSION=$(cat VERSION)
+
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
+          '
+      - id: measurement-7
+        name: Record Measurement After Read version from VERSION file
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Read version from VERSION file
+          task: get-measurement
       - name: Package Helm charts
-        run: |
-          for chart in $(ls charts); do
-            helm package charts/${chart}
-          done
-
+        run: "for chart in $(ls charts); do\n  helm package charts/${chart}\ndone\n"
+      - id: measurement-9
+        name: Record Measurement After Package Helm charts
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Package Helm charts
+          task: get-measurement
       - name: Upload charts to GHCR
-        run: |
-          for pkg in $(ls *.tgz); do
-            helm push ${pkg} oci://${{ env.HELM_REGISTRY }}/${{ env.HELM_REPOSITORY }}
-          done
-
+        run: "for pkg in $(ls *.tgz); do\n  helm push ${pkg} oci://${{ env.HELM_REGISTRY\
+          \ }}/${{ env.HELM_REPOSITORY }}\ndone\n"
+      - id: measurement-11
+        name: Record Measurement After Upload charts to GHCR
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Upload charts to GHCR
+          task: get-measurement
       - name: Save packaged charts to temp directory
-        run: |
-          mkdir -p /tmp/charts
+        run: 'mkdir -p /tmp/charts
+
           cp *.tgz /tmp/charts
 
+          '
+      - id: measurement-13
+        name: Record Measurement After Save packaged charts to temp directory
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Save packaged charts to temp directory
+          task: get-measurement
       - name: Checkout to branch gh-pages
         uses: actions/checkout@v4
         with:
-          ref: gh-pages
           fetch-depth: 0
-
+          ref: gh-pages
       - name: Copy packaged charts
-        run: |
-          cp /tmp/charts/*.tgz .
+        run: 'cp /tmp/charts/*.tgz .
 
-      - name: Update Helm charts repo index
-        env:
-          CHART_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}
-        run: |
-          helm repo index --merge index.yaml --url ${CHART_URL} .
+          '
+      - id: measurement-16
+        name: Record Measurement After Copy packaged charts
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Copy packaged charts
+          task: get-measurement
+      - env:
+          CHART_URL: https://github.com/${{ github.repository }}/releases/download/${{
+            github.ref_name }}
+        name: Update Helm charts repo index
+        run: 'helm repo index --merge index.yaml --url ${CHART_URL} .
+
           git add index.yaml
-          git commit -s -m "Add index for Spark operator chart ${VERSION}" || exit 0
+
+          git commit -s -m "Add index for Spark operator chart ${VERSION}" || exit
+          0
+
           git push
+
+          '
+      - id: measurement-18
+        name: Record Measurement After Update Helm charts repo index
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Update Helm charts repo index
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json

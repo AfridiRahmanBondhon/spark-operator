@@ -1,217 +1,407 @@
-name: Integration Test
-
+name: integration.yaml
 on:
-  pull_request:
-    branches:
-      - master
-      - release-*
-
   push:
     branches:
       - master
-      - release-*
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.actor }}
   cancel-in-progress: true
-
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.actor }}
 jobs:
-  code-check:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Run go mod tidy
-        run: |
-          go mod tidy
-          if ! git diff --quiet; then
-            echo "Please run 'go mod tidy' and commit the changes."
-            git diff
-            false
-          fi
-
-      - name: Generate code
-        run: |
-          make generate
-          if ! git diff --quiet; then
-            echo "Need to re-run 'make generate' and commit the changes."
-            git diff
-            false
-          fi
-
-      - name: Run go fmt check
-        run: |
-          make go-fmt
-          if ! git diff --quiet; then
-            echo "Need to re-run 'make go-fmt' and commit the changes."
-            git diff
-            false
-          fi
-
-      - name: Run go vet check
-        run: |
-          make go-vet
-          if ! git diff --quiet; then
-            echo "Need to re-run 'make go-vet' and commit the changes."
-            git diff
-            false
-          fi
-
-      - name: Run golangci-lint
-        run: |
-          make go-lint
-
   build-api-docs:
     runs-on: ubuntu-latest
     steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
       - name: Build API docs
-        run: |
-          make build-api-docs
-          if ! git diff --quiet; then
-            echo "Need to re-run 'make build-api-docs' and commit the changes."
-            git diff
-            false
-          fi
-
-  build-spark-operator:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+        run: "make build-api-docs\nif ! git diff --quiet; then\n  echo \"Need to re-run\
+          \ 'make build-api-docs' and commit the changes.\"\n  git diff\n  false\n\
+          fi\n"
+      - id: measurement-4
+        name: Record Measurement After Build API docs
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
         with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+          json-output: true
+          label: Build API docs
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
         with:
-          go-version-file: go.mod
-
-      - name: Run go unit tests
-        run: make unit-test
-
-      - name: Build Spark operator
-        run: make build-operator
-
-  build-sparkctl:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
         with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build sparkctl
-        run: make build-sparkctl
-
+          name: total-energy-consumption
+          path: total_energy_consumption.json
   build-helm-chart:
     runs-on: ubuntu-latest
     steps:
-      - name: Determine branch name
-        id: get_branch
-        run: |
-          BRANCH=""
-          if [ "${{ github.event_name }}" == "push" ]; then
-            BRANCH=${{ github.ref_name }}
-          elif [ "${{ github.event_name }}" == "pull_request" ]; then
-            BRANCH=${{ github.base_ref }}
-          fi
-          echo "Branch name: $BRANCH"
-          echo "BRANCH=$BRANCH" >> "$GITHUB_OUTPUT"
-
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - id: get_branch
+        name: Determine branch name
+        run: "BRANCH=\"\"\nif [ \"${{ github.event_name }}\" == \"push\" ]; then\n\
+          \  BRANCH=${{ github.ref_name }}\nelif [ \"${{ github.event_name }}\" ==\
+          \ \"pull_request\" ]; then\n  BRANCH=${{ github.base_ref }}\nfi\necho \"\
+          Branch name: $BRANCH\"\necho \"BRANCH=$BRANCH\" >> \"$GITHUB_OUTPUT\"\n"
+      - id: measurement-2
+        name: Record Measurement After Determine branch name
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Determine branch name
+          task: get-measurement
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Install Helm
         uses: azure/setup-helm@v4
         with:
           version: v3.14.3
-
       - name: Set up chart-testing
         uses: helm/chart-testing-action@v2.7.0
-
       - name: Generate manifests
-        run: |
-          make manifests
-          if ! git diff --quiet; then
-            echo "Need to re-run 'make manifests' and commit the changes."
-            git diff
-            false
-          fi
-
+        run: "make manifests\nif ! git diff --quiet; then\n  echo \"Need to re-run\
+          \ 'make manifests' and commit the changes.\"\n  git diff\n  false\nfi\n"
+      - id: measurement-7
+        name: Record Measurement After Generate manifests
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Generate manifests
+          task: get-measurement
       - name: Detect CRDs drift between chart and manifest
         run: make detect-crds-drift
-
+      - id: measurement-9
+        name: Record Measurement After Detect CRDs drift between chart and manifest
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Detect CRDs drift between chart and manifest
+          task: get-measurement
       - name: Run helm unittest
         run: make helm-unittest
-
-      - name: Run chart-testing (list-changed)
+      - id: measurement-11
+        name: Record Measurement After Run helm unittest
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run helm unittest
+          task: get-measurement
+      - env:
+          BRANCH: ${{ steps.get_branch.outputs.BRANCH }}
         id: list-changed
-        env:
+        name: Run chart-testing (list-changed)
+        run: "changed=$(ct list-changed --target-branch $BRANCH)\nif [[ -n \"$changed\"\
+          \ ]]; then\n  echo \"changed=true\" >> \"$GITHUB_OUTPUT\"\nfi\n"
+      - id: measurement-13
+        name: Record Measurement After Run chart-testing (list-changed)
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run chart-testing (list-changed)
+          task: get-measurement
+      - env:
           BRANCH: ${{ steps.get_branch.outputs.BRANCH }}
-        run: |
-          changed=$(ct list-changed --target-branch $BRANCH)
-          if [[ -n "$changed" ]]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run chart-testing (lint)
         if: steps.list-changed.outputs.changed == 'true'
-        env:
-          BRANCH: ${{ steps.get_branch.outputs.BRANCH }}
+        name: Run chart-testing (lint)
         run: ct lint --check-version-increment=false --target-branch $BRANCH
-
-      - name: Produce the helm documentation
-        if: steps.list-changed.outputs.changed == 'true'
-        run: |
-          make helm-docs
-          if ! git diff --quiet -- charts/spark-operator-chart/README.md; then
-            echo "Need to re-run 'make helm-docs' and commit the changes."
-            false
-          fi
-
-      - name: setup minikube
-        if: steps.list-changed.outputs.changed == 'true'
+      - id: measurement-15
+        name: Record Measurement After Run chart-testing (lint)
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run chart-testing (lint)
+          task: get-measurement
+      - if: steps.list-changed.outputs.changed == 'true'
+        name: Produce the helm documentation
+        run: "make helm-docs\nif ! git diff --quiet -- charts/spark-operator-chart/README.md;\
+          \ then\n  echo \"Need to re-run 'make helm-docs' and commit the changes.\"\
+          \n  false\nfi\n"
+      - id: measurement-17
+        name: Record Measurement After Produce the helm documentation
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Produce the helm documentation
+          task: get-measurement
+      - if: steps.list-changed.outputs.changed == 'true'
+        name: setup minikube
         uses: manusa/actions-setup-minikube@v2.13.1
         with:
-          minikube version: v1.33.0
-          kubernetes version: v1.30.0
-          start args: --memory 6g --cpus=2 --addons ingress
           github token: ${{ inputs.github-token }}
+          kubernetes version: v1.30.0
+          minikube version: v1.33.0
+          start args: --memory 6g --cpus=2 --addons ingress
+      - if: steps.list-changed.outputs.changed == 'true'
+        name: Run chart-testing (install)
+        run: 'docker build -t docker.io/kubeflow/spark-operator:local .
 
-      - name: Run chart-testing (install)
-        if: steps.list-changed.outputs.changed == 'true'
-        run: |
-          docker build -t docker.io/kubeflow/spark-operator:local .
           minikube image load docker.io/kubeflow/spark-operator:local
+
           ct install
 
+          '
+      - id: measurement-20
+        name: Record Measurement After Run chart-testing (install)
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run chart-testing (install)
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
+  build-spark-operator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run go unit tests
+        run: make unit-test
+      - id: measurement-4
+        name: Record Measurement After Run go unit tests
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run go unit tests
+          task: get-measurement
+      - name: Build Spark operator
+        run: make build-operator
+      - id: measurement-6
+        name: Record Measurement After Build Spark operator
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Build Spark operator
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
+  build-sparkctl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build sparkctl
+        run: make build-sparkctl
+      - id: measurement-4
+        name: Record Measurement After Build sparkctl
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Build sparkctl
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
+  code-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run go mod tidy
+        run: "go mod tidy\nif ! git diff --quiet; then\n  echo \"Please run 'go mod\
+          \ tidy' and commit the changes.\"\n  git diff\n  false\nfi\n"
+      - id: measurement-4
+        name: Record Measurement After Run go mod tidy
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run go mod tidy
+          task: get-measurement
+      - name: Generate code
+        run: "make generate\nif ! git diff --quiet; then\n  echo \"Need to re-run\
+          \ 'make generate' and commit the changes.\"\n  git diff\n  false\nfi\n"
+      - id: measurement-6
+        name: Record Measurement After Generate code
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Generate code
+          task: get-measurement
+      - name: Run go fmt check
+        run: "make go-fmt\nif ! git diff --quiet; then\n  echo \"Need to re-run 'make\
+          \ go-fmt' and commit the changes.\"\n  git diff\n  false\nfi\n"
+      - id: measurement-8
+        name: Record Measurement After Run go fmt check
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run go fmt check
+          task: get-measurement
+      - name: Run go vet check
+        run: "make go-vet\nif ! git diff --quiet; then\n  echo \"Need to re-run 'make\
+          \ go-vet' and commit the changes.\"\n  git diff\n  false\nfi\n"
+      - id: measurement-10
+        name: Record Measurement After Run go vet check
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run go vet check
+          task: get-measurement
+      - name: Run golangci-lint
+        run: 'make go-lint
+
+          '
+      - id: measurement-12
+        name: Record Measurement After Run golangci-lint
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run golangci-lint
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
   e2e-test:
     runs-on: ubuntu-latest
+    steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Create a Kind cluster
+        run: make kind-create-cluster KIND_K8S_VERSION=${{ matrix.k8s_version }}
+      - id: measurement-4
+        name: Record Measurement After Create a Kind cluster
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Create a Kind cluster
+          task: get-measurement
+      - name: Build and load image to Kind cluster
+        run: make kind-load-image IMAGE_TAG=local
+      - id: measurement-6
+        name: Record Measurement After Build and load image to Kind cluster
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Build and load image to Kind cluster
+          task: get-measurement
+      - name: Run e2e tests
+        run: make e2e-test
+      - id: measurement-8
+        name: Record Measurement After Run e2e tests
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Run e2e tests
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
     strategy:
       matrix:
         k8s_version:
@@ -224,22 +414,3 @@ jobs:
           - v1.30.8
           - v1.31.4
           - v1.32.0
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Create a Kind cluster
-        run: make kind-create-cluster KIND_K8S_VERSION=${{ matrix.k8s_version }}
-
-      - name: Build and load image to Kind cluster
-        run: make kind-load-image IMAGE_TAG=local
-
-      - name: Run e2e tests
-        run: make e2e-test

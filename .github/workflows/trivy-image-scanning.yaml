@@ -1,32 +1,54 @@
-name: Trivy image scanning
+name: trivy-image-scanning.yaml
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * 1' # Every Monday at 00:00
+  push:
+    branches:
+      - master
 
 jobs:
   image-scanning:
     runs-on: ubuntu-latest
     steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Add image to environment
         run: make print-IMAGE >> $GITHUB_ENV
-
+      - id: measurement-3
+        name: Record Measurement After Add image to environment
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Add image to environment
+          task: get-measurement
       - name: trivy scan for github security tab
         uses: aquasecurity/trivy-action@0.29.0
         with:
-          image-ref: '${{ env.IMAGE }}'
-          format: 'sarif'
+          format: sarif
           ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-          output: 'trivy-results.sarif'
+          image-ref: ${{ env.IMAGE }}
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
           timeout: 30m0s
-
-      - name: Upload Trivy scan results to GitHub Security tab
+          vuln-type: os,library
+      - if: always()
+        name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: trivy-results.sarif
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json

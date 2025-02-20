@@ -1,308 +1,490 @@
-name: Release
-
+name: release.yaml
 on:
   push:
     branches:
-      - release-*
-    paths:
-      - VERSION
+      - master
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
+  group: ${{ github.workflow }}-${{ github.ref }}
 env:
-  SEMVER_PATTERN: '^v([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$'
   IMAGE_REGISTRY: docker.io
   IMAGE_REPOSITORY: kubeflow/spark-operator
-
+  SEMVER_PATTERN: ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$
 jobs:
-  check-release:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check whether version matches semver pattern
-        run: |
-          VERSION=$(cat VERSION)
-          if [[ ${VERSION} =~ ${{ env.SEMVER_PATTERN }} ]]; then
-            echo "Version '${VERSION}' matches semver pattern."
-          else
-            echo "Version '${VERSION}' does not match semver pattern."
-            exit 1
-          fi
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-      - name: Check whether chart version and appVersion matches version
-        run: |
-          VERSION=${VERSION#v}
-          CHART_VERSION=$(cat charts/spark-operator-chart/Chart.yaml | grep version | awk '{print $2}')
-          CHART_APP_VERSION=$(cat charts/spark-operator-chart/Chart.yaml | grep appVersion | awk '{print $2}')
-          if [[ ${CHART_VERSION} == ${VERSION} ]]; then
-            echo "Chart version '${CHART_VERSION}' matches version '${VERSION}'."
-          else
-            echo "Chart version '${CHART_VERSION}' does not match version '${VERSION}'."
-            exit 1
-          fi
-          if [[ ${CHART_APP_VERSION} == ${VERSION} ]]; then
-            echo "Chart appVersion '${CHART_APP_VERSION}' matches version '${VERSION}'."
-          else
-            echo "Chart appVersion '${CHART_APP_VERSION}' does not match version '${VERSION}'."
-            exit 1
-          fi
-
-      - name: Check if tag exists
-        run: |
-          git fetch --tags
-          if git tag -l | grep -q "^${VERSION}$"; then
-            echo "Tag '${VERSION}' already exists."
-            exit 1
-          else
-            echo "Tag '${VERSION}' does not exist."
-          fi
-
-  release_sparkctl:
-    needs:
-      - check-release
-
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: true
-      matrix:
-        os:
-          - linux
-          - darwin
-        arch:
-          - amd64
-          - arm64
-
-    env:
-      GOOS: ${{ matrix.os }}
-      GOARCH: ${{ matrix.arch }}
-
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      - name: Read version from VERSION file
-        run: |
-          VERSION=$(cat VERSION | sed "s/^v//")
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-      - name: Build sparkctl binary
-        run: |
-          make build-sparkctl
-          tar -czvf sparkctl-${VERSION}-${GOOS}-${GOARCH}.tgz -C bin sparkctl
-
-      - name: Upload sparkctl binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: sparkctl-${{ env.VERSION }}-${{ env.GOOS }}-${{ env.GOARCH }}
-          path: sparkctl-${{ env.VERSION }}-${{ env.GOOS }}-${{ env.GOARCH }}.tgz
-          if-no-files-found: error
-          retention-days: 1
-
   build_images:
     needs:
       - release_sparkctl
-
     runs-on: ubuntu-latest
+    steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - name: Prepare
+        run: 'platform=${{ matrix.platform }}
 
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+          '
+      - id: measurement-2
+        name: Record Measurement After Prepare
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Prepare
+          task: get-measurement
+      - name: Checkout source code
+        uses: actions/checkout@v4
+      - name: Read version from VERSION file
+        run: 'VERSION=$(cat VERSION)
+
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+          '
+      - id: measurement-5
+        name: Record Measurement After Read version from VERSION file
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Read version from VERSION file
+          task: get-measurement
+      - id: meta
+        name: Docker meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}
+          tags: 'type=semver,pattern={{version}},value=${{ env.VERSION }}
+
+            '
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to container registry
+        uses: docker/login-action@v3
+        with:
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+      - id: build
+        name: Build and push by digest
+        uses: docker/build-push-action@v6
+        with:
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY
+            }},push-by-digest=true,name-canonical=true,push=true
+          platforms: ${{ matrix.platform }}
+      - name: Export digest
+        run: 'mkdir -p /tmp/digests
+
+          digest="${{ steps.build.outputs.digest }}"
+
+          touch "/tmp/digests/${digest#sha256:}"
+
+          '
+      - id: measurement-12
+        name: Record Measurement After Export digest
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Export digest
+          task: get-measurement
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          retention-days: 1
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
     strategy:
       fail-fast: false
       matrix:
         platform:
           - linux/amd64
           - linux/arm64
-
-    steps:
-      - name: Prepare
-        run: |
-          platform=${{ matrix.platform }}
-          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
-
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      - name: Read version from VERSION file
-        run: |
-          VERSION=$(cat VERSION)
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ env.VERSION }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to container registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.IMAGE_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY }},push-by-digest=true,name-canonical=true,push=true
-
-      - name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: digests-${{ env.PLATFORM_PAIR }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  release_images:
-    needs:
-      - build_images
-
+  check-release:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      - name: Read version from VERSION file
-        run: |
-          VERSION=$(cat VERSION)
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
         with:
-          images: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ env.VERSION }}
-
-      - name: Download digests
-        uses: actions/download-artifact@v4
-        with:
-          path: /tmp/digests
-          pattern: digests-*
-          merge-multiple: true
-
-      - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to container registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.IMAGE_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Create manifest list and push
-        working-directory: /tmp/digests
-        run: |
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}@sha256:%s ' *)
-
-      - name: Inspect image
-        run: |
-          docker buildx imagetools inspect ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}:${{ steps.meta.outputs.version }}
-
-  push_tag:
-    needs:
-      - release_images
-
-    runs-on: ubuntu-latest
-
-    steps:
+          json-output: true
+          task: start-measurement
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Configure Git
-        run: |
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
-
-      - name: Read version from VERSION file
-        run: |
-          VERSION=$(cat VERSION)
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-      - name: Create and push tag
-        run: |
-          git tag -a "${VERSION}" -m "Spark Operator Official Release ${VERSION}"
-          git push origin "${VERSION}"
-
+      - name: Check whether version matches semver pattern
+        run: "VERSION=$(cat VERSION)\nif [[ ${VERSION} =~ ${{ env.SEMVER_PATTERN }}\
+          \ ]]; then\n  echo \"Version '${VERSION}' matches semver pattern.\"\nelse\n\
+          \  echo \"Version '${VERSION}' does not match semver pattern.\"\n  exit\
+          \ 1\nfi\necho \"VERSION=${VERSION}\" >> $GITHUB_ENV\n"
+      - id: measurement-3
+        name: Record Measurement After Check whether version matches semver pattern
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Check whether version matches semver pattern
+          task: get-measurement
+      - name: Check whether chart version and appVersion matches version
+        run: "VERSION=${VERSION#v}\nCHART_VERSION=$(cat charts/spark-operator-chart/Chart.yaml\
+          \ | grep version | awk '{print $2}')\nCHART_APP_VERSION=$(cat charts/spark-operator-chart/Chart.yaml\
+          \ | grep appVersion | awk '{print $2}')\nif [[ ${CHART_VERSION} == ${VERSION}\
+          \ ]]; then\n  echo \"Chart version '${CHART_VERSION}' matches version '${VERSION}'.\"\
+          \nelse\n  echo \"Chart version '${CHART_VERSION}' does not match version\
+          \ '${VERSION}'.\"\n  exit 1\nfi\nif [[ ${CHART_APP_VERSION} == ${VERSION}\
+          \ ]]; then\n  echo \"Chart appVersion '${CHART_APP_VERSION}' matches version\
+          \ '${VERSION}'.\"\nelse\n  echo \"Chart appVersion '${CHART_APP_VERSION}'\
+          \ does not match version '${VERSION}'.\"\n  exit 1\nfi\n"
+      - id: measurement-5
+        name: Record Measurement After Check whether chart version and appVersion
+          matches version
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Check whether chart version and appVersion matches version
+          task: get-measurement
+      - name: Check if tag exists
+        run: "git fetch --tags\nif git tag -l | grep -q \"^${VERSION}$\"; then\n \
+          \ echo \"Tag '${VERSION}' already exists.\"\n  exit 1\nelse\n  echo \"Tag\
+          \ '${VERSION}' does not exist.\"\nfi\n"
+      - id: measurement-7
+        name: Record Measurement After Check if tag exists
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Check if tag exists
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
   draft_release:
     needs:
       - push_tag
-
     permissions:
       contents: write
-
     runs-on: ubuntu-latest
-
     steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Configure Git
-        run: |
-          git config user.name "$GITHUB_ACTOR"
+        run: 'git config user.name "$GITHUB_ACTOR"
+
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
+          '
+      - id: measurement-3
+        name: Record Measurement After Configure Git
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Configure Git
+          task: get-measurement
       - name: Read version from VERSION file
-        run: |
-          VERSION=$(cat VERSION)
+        run: 'VERSION=$(cat VERSION)
+
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
+          '
+      - id: measurement-5
+        name: Record Measurement After Read version from VERSION file
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Read version from VERSION file
+          task: get-measurement
       - name: Set up Helm
         uses: azure/setup-helm@v4.2.0
         with:
           version: v3.14.4
-
       - name: Package Helm charts
-        run: |
-          for chart in $(ls charts); do
-            helm package charts/${chart}
-          done
-
+        run: "for chart in $(ls charts); do\n  helm package charts/${chart}\ndone\n"
+      - id: measurement-8
+        name: Record Measurement After Package Helm charts
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Package Helm charts
+          task: get-measurement
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: sparkctl-*
-
-      - name: Release
-        id: release
+      - id: release
+        name: Release
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: "Spark Operator ${{ env.VERSION }}"
-          tag_name: ${{ env.VERSION }}
-          prerelease: ${{ contains(env.VERSION, 'rc') }}
-          target_commitish: ${{ github.sha }}
           draft: true
-          files: |
-            *.tgz
+          files: '*.tgz
+
             sparkctl-*/sparkctl-*.tgz
+
+            '
+          name: Spark Operator ${{ env.VERSION }}
+          prerelease: ${{ contains(env.VERSION, 'rc') }}
+          tag_name: ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
+  push_tag:
+    needs:
+      - release_images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure Git
+        run: 'git config user.name "$GITHUB_ACTOR"
+
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+          '
+      - id: measurement-3
+        name: Record Measurement After Configure Git
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Configure Git
+          task: get-measurement
+      - name: Read version from VERSION file
+        run: 'VERSION=$(cat VERSION)
+
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+          '
+      - id: measurement-5
+        name: Record Measurement After Read version from VERSION file
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Read version from VERSION file
+          task: get-measurement
+      - name: Create and push tag
+        run: 'git tag -a "${VERSION}" -m "Spark Operator Official Release ${VERSION}"
+
+          git push origin "${VERSION}"
+
+          '
+      - id: measurement-7
+        name: Record Measurement After Create and push tag
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Create and push tag
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
+  release_images:
+    needs:
+      - build_images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - name: Checkout source code
+        uses: actions/checkout@v4
+      - name: Read version from VERSION file
+        run: 'VERSION=$(cat VERSION)
+
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+          '
+      - id: measurement-3
+        name: Record Measurement After Read version from VERSION file
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Read version from VERSION file
+          task: get-measurement
+      - id: meta
+        name: Docker meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}
+          tags: 'type=semver,pattern={{version}},value=${{ env.VERSION }}
+
+            '
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: /tmp/digests
+          pattern: digests-*
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to container registry
+        uses: docker/login-action@v3
+        with:
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+      - name: Create manifest list and push
+        run: "docker buildx imagetools create $(jq -cr '.tags | map(\"-t \" + .) |\
+          \ join(\" \")' <<< \"$DOCKER_METADATA_OUTPUT_JSON\") \\\n  $(printf '${{\
+          \ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}@sha256:%s ' *)\n"
+        working-directory: /tmp/digests
+      - id: measurement-9
+        name: Record Measurement After Create manifest list and push
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Create manifest list and push
+          task: get-measurement
+      - name: Inspect image
+        run: 'docker buildx imagetools inspect ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPOSITORY
+          }}:${{ steps.meta.outputs.version }}
+
+          '
+      - id: measurement-11
+        name: Record Measurement After Inspect image
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Inspect image
+          task: get-measurement
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
+  release_sparkctl:
+    env:
+      GOARCH: ${{ matrix.arch }}
+      GOOS: ${{ matrix.os }}
+    needs:
+      - check-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Energy Measurement
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: start-measurement
+      - name: Checkout source code
+        uses: actions/checkout@v4
+      - name: Read version from VERSION file
+        run: 'VERSION=$(cat VERSION | sed "s/^v//")
+
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+          '
+      - id: measurement-3
+        name: Record Measurement After Read version from VERSION file
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Read version from VERSION file
+          task: get-measurement
+      - name: Build sparkctl binary
+        run: 'make build-sparkctl
+
+          tar -czvf sparkctl-${VERSION}-${GOOS}-${GOARCH}.tgz -C bin sparkctl
+
+          '
+      - id: measurement-5
+        name: Record Measurement After Build sparkctl binary
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          label: Build sparkctl binary
+          task: get-measurement
+      - name: Upload sparkctl binary
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: sparkctl-${{ env.VERSION }}-${{ env.GOOS }}-${{ env.GOARCH }}
+          path: sparkctl-${{ env.VERSION }}-${{ env.GOOS }}-${{ env.GOARCH }}.tgz
+          retention-days: 1
+      - id: display-measurement
+        name: Display Energy Results
+        uses: green-coding-solutions/eco-ci-energy-estimation@v4
+        with:
+          json-output: true
+          task: display-results
+      - name: Save Total Energy Consumption Data
+        run: echo '${{ steps.final-measurement.outputs.data-total-json }}' > total_energy_consumption.json
+      - name: Upload Energy Consumption Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-energy-consumption
+          path: total_energy_consumption.json
+    strategy:
+      fail-fast: true
+      matrix:
+        arch:
+          - amd64
+          - arm64
+        os:
+          - linux
+          - darwin
